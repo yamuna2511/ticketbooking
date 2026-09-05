@@ -24,6 +24,12 @@ pipeline {
                 sh 'mvn test'
             }
         }
+		
+		stage('Docker Build') {
+			steps {
+				sh 'docker build -t ticketbooking:1.5 .'
+			}
+		}
     }
 
     post {
