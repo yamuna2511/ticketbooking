@@ -36,6 +36,23 @@ pipeline {
 				sh 'docker build -t ticketbooking:1.5 .'
 			}
 		}
+		
+		stage('Docker Push') {
+			steps {
+				withCredentials([usernamePassword(
+					credentialsId: 'dockerhub-credentials',
+					usernameVariable: 'DOCKER_USERNAME',
+					passwordVariable: 'DOCKER_PASSWORD'
+				)]) {
+					sh '''
+						echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+						docker tag ticketbooking:1.5 $DOCKER_USERNAME/ticketbooking:1.5
+						docker push $DOCKER_USERNAME/ticketbooking:1.5
+						docker logout
+					'''
+				}
+			}
+		}
     }
 
     post {
