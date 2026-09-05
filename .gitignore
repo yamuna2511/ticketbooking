@@ -31,4 +31,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
 BOOT-INF/
+
+k8s/postgres-secret.yml
