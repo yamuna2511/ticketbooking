@@ -5,7 +5,10 @@ pipeline {
         DOCKER_HOST = 'tcp://docker:2376'
         DOCKER_TLS_VERIFY = '1'
         DOCKER_CERT_PATH = '/certs/client'
+
         IMAGE_NAME = 'yamuna2511/ticketbooking'
+
+        VERSION_BASE_DIR = '/var/jenkins_home/ticketbooking-versions'
     }
 
     tools {
@@ -23,45 +26,94 @@ pipeline {
         stage('Version') {
             steps {
                 script {
-                    def branchName = env.BRANCH_NAME ?: 'unknown'
-                    
-                    // Make branch name safe for use as a directory name
-                    def safeBranchName = branchName.replaceAll('[^a-zA-Z0-9._-]', '-')
 
-                    def versionDir = "/var/jenkins_home/ticketbooking-versions/${safeBranchName}"
-                    def versionFile = "${versionDir}/version.txt"
+                    def branchName = env.BRANCH_NAME ?: 'unknown'
+
+                    // Convert feature/test into a safe directory name
+                    def safeBranchName =
+                        branchName.replaceAll('[^a-zA-Z0-9._-]', '-')
+
+                    def versionDir =
+                        "${env.VERSION_BASE_DIR}/${safeBranchName}"
+
+                    def jenkinsVersionFile =
+                        "${versionDir}/version.txt"
+
+                    env.VERSION_DIR = versionDir
+                    env.JENKINS_VERSION_FILE = jenkinsVersionFile
 
                     sh """
                         mkdir -p '${versionDir}'
-
-                        if [ ! -f '${versionFile}' ]; then
-                            echo '1.0' > '${versionFile}'
-                        fi
                     """
 
-                    def currentVersion = sh(
-                        script: "cat '${versionFile}'",
-                        returnStdout: true
-                    ).trim()
+                    /*
+                     * Check whether Jenkins already has a version
+                     */
+                    def jenkinsVersionExists = sh(
+                        script: "[ -f '${jenkinsVersionFile}' ]",
+                        returnStatus: true
+                    ) == 0
 
-                    def parts = currentVersion.tokenize('.')
-                    def major = parts[0].toInteger()
-                    def minor = parts[1].toInteger()
+                    if (jenkinsVersionExists) {
 
-                    minor++
+                        /*
+                         * Jenkins version exists.
+                         * Use it for this build.
+                         */
+                        def currentVersion = sh(
+                            script: "cat '${jenkinsVersionFile}'",
+                            returnStdout: true
+                        ).trim()
 
-                    def newVersion = "${major}.${minor}"
+                        env.IMAGE_TAG = currentVersion
 
-                    sh """
-                        echo '${newVersion}' > '${versionFile}'
-                    """
+                        echo "======================================"
+                        echo "Jenkins version exists"
+                        echo "Branch          : ${branchName}"
+                        echo "Jenkins version : ${currentVersion}"
+                        echo "Using version   : ${currentVersion}"
+                        echo "======================================"
 
-                    env.IMAGE_TAG = newVersion
+                    } else {
 
-                    echo "Branch: ${branchName}"
-                    echo "Version: ${newVersion}"
-                    echo "Version file: ${versionFile}"
-                    echo "Docker image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                        /*
+                         * Jenkins version does NOT exist.
+                         * This is the first build.
+                         *
+                         * Get the initial version from Git repository.
+                         */
+                        def repoVersionFile = 'version.txt'
+
+                        def repoVersionExists = sh(
+                            script: "[ -f '${repoVersionFile}' ]",
+                            returnStatus: true
+                        ) == 0
+
+                        if (!repoVersionExists) {
+                            error(
+                                "First build requires version.txt in the Git repository, but it was not found."
+                            )
+                        }
+
+                        def repoVersion = sh(
+                            script: "cat '${repoVersionFile}'",
+                            returnStdout: true
+                        ).trim()
+
+                        env.IMAGE_TAG = repoVersion
+
+                        echo "======================================"
+                        echo "FIRST BUILD"
+                        echo "Branch          : ${branchName}"
+                        echo "Jenkins version : NOT FOUND"
+                        echo "Repo version    : ${repoVersion}"
+                        echo "Using version   : ${repoVersion}"
+                        echo "======================================"
+
+                    }
+
+                    echo "Docker image will use:"
+                    echo "${env.IMAGE_NAME}:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -79,24 +131,55 @@ pipeline {
         }
 
         stage('Docker Build') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'release'
+                    branch 'patchset'
+                    branch 'hotfix'
+                }
+            }
+
             steps {
-                sh 'docker build -t ticketbooking:${IMAGE_TAG} .'
+                sh '''
+                    docker build \
+                        -t ticketbooking:${IMAGE_TAG} \
+                        .
+                '''
             }
         }
 
         stage('Docker Push') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'release'
+                    branch 'patchset'
+                    branch 'hotfix'
+                }
+            }
+
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-credentials',
-                    usernameVariable: 'DOCKER_USERNAME',
-                    passwordVariable: 'DOCKER_PASSWORD'
-                )]) {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+
                     sh '''
-                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+                        echo "$DOCKER_PASSWORD" | \
+                            docker login \
+                            -u "$DOCKER_USERNAME" \
+                            --password-stdin
 
-                        docker tag ticketbooking:${IMAGE_TAG} ${IMAGE_NAME}:${IMAGE_TAG}
+                        docker tag \
+                            ticketbooking:${IMAGE_TAG} \
+                            ${IMAGE_NAME}:${IMAGE_TAG}
 
-                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                        docker push \
+                            ${IMAGE_NAME}:${IMAGE_TAG}
 
                         docker logout
                     '''
@@ -105,6 +188,15 @@ pipeline {
         }
 
         stage('Deploy to Kubernetes') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'release'
+                    branch 'patchset'
+                    branch 'hotfix'
+                }
+            }
+
             steps {
                 sh '''
                     kubectl \
@@ -124,15 +216,72 @@ pipeline {
                 '''
             }
         }
+
+        /*
+         * IMPORTANT:
+         *
+         * This stage runs only after all previous stages succeed.
+         *
+         * Therefore:
+         * - Build failure     -> no increment
+         * - Test failure      -> no increment
+         * - Docker failure    -> no increment
+         * - Push failure      -> no increment
+         * - Deployment fail   -> no increment
+         * - Everything passes -> increment
+         */
+        stage('Update Jenkins Version') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'release'
+                    branch 'patchset'
+                    branch 'hotfix'
+                }
+            }
+
+            steps {
+                script {
+
+                    def currentVersion = env.IMAGE_TAG
+
+                    def parts = currentVersion.tokenize('.')
+
+                    if (parts.size() != 2) {
+                        error(
+                            "Invalid version '${currentVersion}'. Expected format like 1.0"
+                        )
+                    }
+
+                    def major = parts[0].toInteger()
+                    def minor = parts[1].toInteger()
+
+                    def nextVersion = "${major}.${minor + 1}"
+
+                    sh """
+                        echo '${nextVersion}' > '${env.JENKINS_VERSION_FILE}'
+                    """
+
+                    echo "======================================"
+                    echo "DEPLOYMENT SUCCESSFUL"
+                    echo "Branch         : ${env.BRANCH_NAME}"
+                    echo "Used version   : ${currentVersion}"
+                    echo "Next version   : ${nextVersion}"
+                    echo "Jenkins file   : ${env.JENKINS_VERSION_FILE}"
+                    echo "======================================"
+                }
+            }
+        }
     }
 
     post {
+
         success {
             echo 'Jenkins pipeline completed successfully!'
         }
 
         failure {
-            echo 'Jenkins pipeline failed. Check the console output.'
+            echo 'Jenkins pipeline failed. Jenkins version was NOT incremented.'
         }
     }
 }
