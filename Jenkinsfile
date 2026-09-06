@@ -5,6 +5,8 @@ pipeline {
         DOCKER_HOST = 'tcp://docker:2376'
         DOCKER_TLS_VERIFY = '1'
         DOCKER_CERT_PATH = '/certs/client'
+		IMAGE_NAME = 'yamuna2511/ticketbooking'
+		IMAGE_TAG = "${BUILD_NUMBER}"
     }
 	
 	tools { 
@@ -33,7 +35,7 @@ pipeline {
 		
 		stage('Docker Build') {
 			steps {
-				sh 'docker build -t ticketbooking:1.5 .'
+				sh 'docker build -t ticketbooking:${IMAGE_TAG} .'
 			}
 		}
 		
@@ -46,8 +48,8 @@ pipeline {
 				)]) {
 					sh '''
 						echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-						docker tag ticketbooking:1.5 $DOCKER_USERNAME/ticketbooking:1.5
-						docker push $DOCKER_USERNAME/ticketbooking:1.5
+						docker tag ticketbooking:${IMAGE_TAG} ${IMAGE_NAME}:${IMAGE_TAG}
+						docker push ${IMAGE_NAME}:${IMAGE_TAG}
 						docker logout
 					'''
 				}
@@ -63,7 +65,7 @@ pipeline {
 					  --tls-server-name=localhost \
 					  -n development \
 					  set image deployment/ticketbooking \
-					  ticketbooking=yamuna2511/ticketbooking:1.5
+					  ticketbooking=${IMAGE_NAME}:${IMAGE_TAG}
 
 					kubectl \
 					  --kubeconfig=/tmp/jenkins-kubeconfig \
