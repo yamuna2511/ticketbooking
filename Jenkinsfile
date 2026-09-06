@@ -53,6 +53,27 @@ pipeline {
 				}
 			}
 		}
+		
+		stage('Deploy to Kubernetes') {
+			steps {
+				sh '''
+					kubectl \
+					  --kubeconfig=/tmp/jenkins-kubeconfig \
+					  --server=https://host.docker.internal:51396 \
+					  --tls-server-name=localhost \
+					  -n development \
+					  set image deployment/ticketbooking \
+					  ticketbooking=yamuna2511/ticketbooking:1.5
+
+					kubectl \
+					  --kubeconfig=/tmp/jenkins-kubeconfig \
+					  --server=https://host.docker.internal:51396 \
+					  --tls-server-name=localhost \
+					  -n development \
+					  rollout status deployment/ticketbooking
+				'''
+			}
+		}
     }
 
     post {
